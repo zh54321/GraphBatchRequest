@@ -32,9 +32,6 @@
 .PARAMETER JsonDepth
     Specifies the depth for JSON conversion in  the request. Default is 10, but can be increased for complex objects.
 
-.PARAMETER DebugMode
-    Enables detailed debugging output, including request and response details.
-
 .EXAMPLE
     $AccessToken = "YOUR_ACCESS_TOKEN"
     $Requests = @(
@@ -127,17 +124,24 @@ function Send-GraphBatchRequest {
                 } else {
                     $ErrorCode = $Resp.body.error.code
                     $ErrorMessage = $Resp.body.error.message
-                    write-host "[!] Graph Patch Request: ID $($Resp.id) failed with status $($Resp.status): $ErrorCode - $ErrorMessage"
+                    write-host "[!] Graph Batch Request: ID $($Resp.id) failed with status $($Resp.status): $ErrorCode - $ErrorMessage"
                     # Handle throttling & transient errors per request
                     if ($Resp.status -in @(429, 500, 502, 503, 504)) {
                         $RetryAfter = $Resp.headers["Retry-After"]
                         if ($RetryAfter) {
-                            if ($VerboseMode) {Write-Warning "Retrying request $($Resp.id) after $RetryAfter seconds..."} else {write-host "[!] Request will be resend..."}
+                            if ($VerboseMode) {write-host "Retrying request $($Resp.id) after $RetryAfter seconds..."} else {write-host "[!] Request will be resend in $RetryAfter second..."}
                             Start-Sleep -Seconds $RetryAfter
                         } else {
-                            if ($VerboseMode) {Write-Warning "Retrying request $($Resp.id) after $Backoff seconds..."} else {write-host "[!] Request will be resend..."}
+                            #Send first request immideatly otherwhise increase backoff
+                            if ($RetryCount -eq 0) {
+                                $Backoff = 0
+                                write-host "Retrying request $($Resp.id)..."
+                            } else {
+                                $Backoff = [math]::Pow(2, $RetryCount)
+                                write-host "[!] Request will be resend in $Backoff seconds..."
+                            }
+
                             Start-Sleep -Seconds $Backoff
-                            $Backoff = [math]::Pow(2, $RetryCount)
                         }
                         # Add to failed requests for retry
                         $FailedRequests += $Batch | Where-Object { $_.id -eq $Resp.id }
