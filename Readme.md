@@ -7,7 +7,7 @@ It supports automatic throttling handling, pagination, and can return results in
 
 This module is useful for executing multiple Microsoft Graph requests in a single API call, reducing network traffic and improving efficiency.
 
-Note: The cleartext access tokens can be obtained for exampel using [EntraTokenAid](https://github.com/zh54321/EntraTokenAid).
+Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid](https://github.com/zh54321/EntraTokenAid).
 
 ## Parameters
 
