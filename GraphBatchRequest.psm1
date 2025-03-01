@@ -18,7 +18,7 @@
 
 .PARAMETER UserAgent
     Specifies the user agent string to be used in the HTTP requests. This can be customized to mimic specific browser or application behavior.
-    Default: `Mozilla/5.0 (Windows NT 10.0; Microsoft Windows 10.0.19045; en-us) PowerShell/7.5.0`
+    Default: `python-requests/2.32.3`
 
 .PARAMETER MaxRetries
     Specifies the maximum number of retry attempts for failed requests. Default is 5.
@@ -29,8 +29,11 @@
 .PARAMETER RawJson
     If specified, returns the response as a raw JSON string instead of a PowerShell object.
 
-.PARAMETER JsonDepth
-    Specifies the depth for JSON conversion in  the request. Default is 10, but can be increased for complex objects.
+.PARAMETER JsonDepthRequest
+    Specifies the depth for JSON conversion in the request. Default is 10, but can be increased for complex objects.
+
+.PARAMETER JsonDepthResponse
+    Specifies the depth for JSON conversion in the response (to use with -RawJson). Default is 10, but can be increased for complex objects.
 
 .EXAMPLE
     $AccessToken = "YOUR_ACCESS_TOKEN"
@@ -40,9 +43,23 @@
     
     Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -VerboseMode
 
+.EXAMPLE
+    $AccessToken = "YOUR_ACCESS_TOKEN"
+    $Requests = @(
+        @{ 
+            "id" = "1"
+            "method" = "POST"
+            "url" = "/groups"
+            "body" = @{ "displayName" = "New Group"; "mailEnabled" = $false; "mailNickname" = "whatever"; "securityEnabled" = $true }
+            "headers" = @{"Content-Type"= "application/json"} 
+        }
+    )
+    
+    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -RawJson
+
 .NOTES
     Author: ZH54321
-    GitHub: https://github.com/zh54321/GraphBatchRequest.git
+    GitHub: https://github.com/zh54321/GraphBatchRequest
 #>
 
 function Send-GraphBatchRequest { 
@@ -54,7 +71,8 @@ function Send-GraphBatchRequest {
         [array]$Requests,
 
         [int]$MaxRetries = 5,
-        [int]$JsonDepth = 10,
+        [int]$JsonDepthRequest = 10,
+        [int]$JsonDepthResponse = 10,
         [string]$UserAgent = "Mozilla/5.0 (Windows NT 10.0; Microsoft Windows 10.0.19045; en-us) PowerShell/7.5.0",
         [switch]$VerboseMode,
         [switch]$BetaAPI,
@@ -93,10 +111,10 @@ function Send-GraphBatchRequest {
                 "Content-Type" = "application/json"
             }
             
-            if ($VerboseMode) { Write-Host "Sending batch request: $($BatchRequest | ConvertTo-Json -Depth $JsonDepth)" }
+            if ($VerboseMode) { Write-Host "Sending batch request: $($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)" }
 
             try {
-                $Response = Invoke-RestMethod -Uri $BatchUrl -Method Post -Headers $Headers -Body ($BatchRequest | ConvertTo-Json -Depth $JsonDepth)
+                $Response = Invoke-RestMethod -Uri $BatchUrl -Method Post -Headers $Headers -Body ($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)
                 $PendingRequests = @()  # Reset failed requests
             } catch {
                 Write-Error "Batch request failed: $_"
@@ -160,7 +178,7 @@ function Send-GraphBatchRequest {
 
     # Return JSON if -RawJson switch is used, otherwise return PowerShell object
     if ($RawJson) {
-        return $Results | ConvertTo-Json -Depth 10
+        return $Results | ConvertTo-Json -Depth $JsonDepthResponse
     } else {
         return $Results
     }
