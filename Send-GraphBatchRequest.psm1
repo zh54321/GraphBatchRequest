@@ -147,13 +147,13 @@ function Send-GraphBatchRequest {
                     if ($Resp.status -in @(429, 500, 502, 503, 504)) {
                         $RetryAfter = $Resp.headers["Retry-After"]
                         if ($RetryAfter) {
-                            if ($VerboseMode) {write-host "Retrying request $($Resp.id) after $RetryAfter seconds..."} else {write-host "[!] Request will be resend in $RetryAfter second..."}
+                            if ($VerboseMode) {write-host "[i] Retrying request $($Resp.id) after $RetryAfter seconds..."} else {write-host "[!] Request will be resend in $RetryAfter second..."}
                             Start-Sleep -Seconds $RetryAfter
                         } else {
                             #Send first request immideatly otherwhise increase backoff
                             if ($RetryCount -eq 0) {
                                 $Backoff = 0
-                                write-host "Retrying request $($Resp.id)..."
+                                write-host "[i] Retrying request $($Resp.id)..."
                             } else {
                                 $Backoff = [math]::Pow(2, $RetryCount)
                                 write-host "[!] Request will be resend in $Backoff seconds..."
