@@ -29,6 +29,9 @@
 .PARAMETER RawJson
     If specified, returns the response as a raw JSON string instead of a PowerShell object.
 
+.PARAMETER BatchDelay
+    Specifies a delay in seconds between each batch request to avoid throttling. Default is 0 (no delay).
+
 .PARAMETER JsonDepthRequest
     Specifies the depth for JSON conversion in the request. Default is 10, but can be increased for complex objects.
 
@@ -74,6 +77,7 @@ function Send-GraphBatchRequest {
         [int]$JsonDepthRequest = 10,
         [int]$JsonDepthResponse = 10,
         [string]$UserAgent = "Mozilla/5.0 (Windows NT 10.0; Microsoft Windows 10.0.19045; en-us) PowerShell/7.5.0",
+        [int]$BatchDelay = 0,
         [switch]$VerboseMode,
         [switch]$BetaAPI,
         [switch]$RawJson
@@ -145,20 +149,28 @@ function Send-GraphBatchRequest {
                     write-host "[!] Graph Batch Request: ID $($Resp.id) failed with status $($Resp.status): $ErrorCode - $ErrorMessage"
                     # Handle throttling & transient errors per request
                     if ($Resp.status -in @(429, 500, 502, 503, 504)) {
-                        $RetryAfter = $Resp.headers["Retry-After"]
+                        $RetryAfter = $null
+
+                        # Try to parse "Retry-After" from error message
+                        if ($ErrorMessage -match "try after (\d+) seconds") {
+                            $RetryAfter = [int]$matches[1]
+                        }
+                        
                         if ($RetryAfter) {
-                            if ($VerboseMode) {write-host "[i] Retrying request $($Resp.id) after $RetryAfter seconds..."} else {write-host "[!] Request will be resend in $RetryAfter second..."}
+                            if ($VerboseMode) {
+                                write-host "[i] Retrying request $($Resp.id) after $RetryAfter seconds..."
+                            } else {
+                                write-host "[!] Request will be resent in $RetryAfter seconds..."
+                            }
                             Start-Sleep -Seconds $RetryAfter
                         } else {
-                            #Send first request immideatly otherwhise increase backoff
                             if ($RetryCount -eq 0) {
                                 $Backoff = 0
                                 write-host "[i] Retrying request $($Resp.id)..."
                             } else {
                                 $Backoff = [math]::Pow(2, $RetryCount)
-                                write-host "[!] Request will be resend in $Backoff seconds..."
+                                write-host "[!] Request will be resent in $Backoff seconds..."
                             }
-
                             Start-Sleep -Seconds $Backoff
                         }
                         # Add to failed requests for retry
@@ -174,6 +186,11 @@ function Send-GraphBatchRequest {
             $PendingRequests = $FailedRequests
             $RetryCount++
         } while ($PendingRequests.Count -gt 0 -and $RetryCount -lt $MaxRetries)
+
+        if ($BatchDelay -gt 0) {
+            if ($VerboseMode) { Write-Host "Sleeping $BatchDelay seconds before next batch..." }
+            Start-Sleep -Seconds $BatchDelay
+        }
     }
 
     # Return JSON if -RawJson switch is used, otherwise return PowerShell object

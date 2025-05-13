@@ -20,6 +20,7 @@ Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid
 | `-VerboseMode`               | Enables verbose logging to provide additional information about request processing.         |
 | `-BetaAPI`                   | If specified, uses the Microsoft Graph `Beta` endpoint instead of `v1.0`.                   |
 | `-RawJson`                   | If specified, returns the response as a raw JSON string instead of a PowerShell object.     |
+| `-BatchDelay` *(Default: 0)* | Specifies a delay in seconds between each batch request to avoid throttling.                |
 | `-JsonDepthResponse` *(Default: 10)* | Specifies the depth for JSON conversion (request). Useful for deeply nested objects in combination with `-RawJson` .  |
 
 ## Examples
