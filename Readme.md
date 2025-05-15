@@ -21,6 +21,7 @@ Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid
 | `-BetaAPI`                   | If specified, uses the Microsoft Graph `Beta` endpoint instead of `v1.0`.                   |
 | `-RawJson`                   | If specified, returns the response as a raw JSON string instead of a PowerShell object.     |
 | `-BatchDelay` *(Default: 0)* | Specifies a delay in seconds between each batch request to avoid throttling.                |
+| `-QueryParameters`           | Query parameters (e.g., @{ '$select' = 'displayName'}) applied to all requests              |
 | `-JsonDepthResponse` *(Default: 10)* | Specifies the depth for JSON conversion (request). Useful for deeply nested objects in combination with `-RawJson` .  |
 
 ## Examples
@@ -72,19 +73,31 @@ $Response = Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests
 $Response
 ```
 
-### Example 3: **Use the Beta API Endpoint and verbode mode**
+### Example 3: **Global Query Parameters and Proxy Usage**
 
 ```powershell
 $AccessToken = "YOUR_ACCESS_TOKEN"
 $Requests = @(
-    @{ "id" = "1"; "method" = "GET"; "url" = "/me" }
+    @{ "id" = "1"; "method" = "GET"; "url" = "/groups"},
+    @{"id" = "2"; "method" = "GET"; "url" = "/users"}
 )
-
-$Response = Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -BetaAPI -VerboseMode
+Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -proxy http://127.0.0.1:8080 -QueryParameters @{'$select' = 'id,displayName' }
 $Response.response
 ```
 
-### Example 4: **Generate Dynamic Requests**
+### Example 4: **Request-Level Query Parameters**
+
+```powershell
+    $AccessToken = "YOUR_ACCESS_TOKEN"
+    $Requests = @(
+        @{ id = "1"; method = "GET"; url = "/users"; queryParameters = @{ '$filter' = "startswith(displayName,'Adele')"; '$select' = 'displayName' } },
+        @{ id = "2"; method = "GET"; url = "/groups"; queryParameters = @{ '$select' = 'id' } }
+    )
+    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests
+$Response.response
+```
+
+### Example 5: **Generate Dynamic Requests**
 
 Asuming you have an array of group objects stored in $groups
 ```powershell

@@ -32,8 +32,15 @@
 .PARAMETER BatchDelay
     Specifies a delay in seconds between each batch request to avoid throttling. Default is 0 (no delay).
 
+.PARAMETER Proxy
+    Specifies a web proxy to use for the HTTP request (e.g., http://proxyserver:8080). Useful for debugging, traffic inspection.
+
 .PARAMETER JsonDepthRequest
     Specifies the depth for JSON conversion in the request. Default is 10, but can be increased for complex objects.
+
+.PARAMETER QueryParameters
+    A hashtable of query parameters (e.g., @{ '$select' = 'displayName'; '$top' = '5' }) applied to all requests.
+    Individual requests can override or add their own query parameters by including a `queryParameters` hashtable in the request object.
 
 .PARAMETER JsonDepthResponse
     Specifies the depth for JSON conversion in the response (to use with -RawJson). Default is 10, but can be increased for complex objects.
@@ -60,6 +67,22 @@
     
     Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -RawJson
 
+.EXAMPLE
+    $AccessToken = "YOUR_ACCESS_TOKEN"
+    $Requests = @(
+        @{ "id" = "1"; "method" = "GET"; "url" = "/groups"},
+        @{"id" = "2"; "method" = "GET"; "url" = "/users"}
+    )
+    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -VerboseMode -proxy http://127.0.0.1:8080 -QueryParameters @{'$select' = 'displayName' }
+
+.EXAMPLE
+    $AccessToken = "YOUR_ACCESS_TOKEN"
+    $Requests = @(
+        @{ id = "1"; method = "GET"; url = "/users"; queryParameters = @{ '$filter' = "startswith(displayName,'Adele')"; '$select' = 'displayName' } },
+        @{ id = "2"; method = "GET"; url = "/groups"; queryParameters = @{ '$select' = 'id' } }
+    )
+    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests
+
 .NOTES
     Author: ZH54321
     GitHub: https://github.com/zh54321/GraphBatchRequest
@@ -78,6 +101,8 @@ function Send-GraphBatchRequest {
         [int]$JsonDepthResponse = 10,
         [string]$UserAgent = "Mozilla/5.0 (Windows NT 10.0; Microsoft Windows 10.0.19045; en-us) PowerShell/7.5.0",
         [int]$BatchDelay = 0,
+        [string]$Proxy,
+        [hashtable]$QueryParameters,
         [switch]$VerboseMode,
         [switch]$BetaAPI,
         [switch]$RawJson
@@ -107,6 +132,38 @@ function Send-GraphBatchRequest {
         $PendingRequests = $Batch
         $RetryCount = 0
 
+        foreach ($req in $PendingRequests) {
+            $effectiveParams = @{}
+        
+            # Use per-request queryParameters if defined
+            if ($req.ContainsKey('queryParameters')) {
+                $effectiveParams += $req.queryParameters
+            }
+        
+            # Merge in global parameters if not already present
+            if ($QueryParameters) {
+                foreach ($key in $QueryParameters.Keys) {
+                    if (-not $effectiveParams.ContainsKey($key)) {
+                        $effectiveParams[$key] = $QueryParameters[$key]
+                    }
+                }
+            }
+        
+            # Build and append query string to the URL
+            if ($effectiveParams.Count -gt 0) {
+                $queryString = ($effectiveParams.GetEnumerator() |
+                    ForEach-Object {
+                        "$($_.Key)=$([uri]::EscapeDataString($_.Value))"
+                    }) -join '&'
+        
+                if ($req.url -notmatch "\?") {
+                    $req.url = "$($req.url)?$queryString"
+                } else {
+                    $req.url = "$($req.url)&$queryString"
+                }
+            }
+        }
+
         do {
             $BatchRequest = @{ requests = $PendingRequests }
             $Headers = @{
@@ -118,7 +175,22 @@ function Send-GraphBatchRequest {
             if ($VerboseMode) { Write-Host "Sending batch request: $($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)" }
 
             try {
-                $Response = Invoke-RestMethod -Uri $BatchUrl -Method Post -Headers $Headers -Body ($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)
+
+                # Request Parameters
+                $irmParams = @{
+                    Uri         = $BatchUrl
+                    Method      = 'POST'
+                    Headers     = $Headers
+                    Body        = ($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)
+                    ErrorAction = 'Stop'
+                }
+            
+                if ($Proxy) {
+                    $irmParams['Proxy'] = $Proxy
+                }
+                
+                # Send request
+                $Response = Invoke-RestMethod @irmParams
                 $PendingRequests = @()  # Reset failed requests
             } catch {
                 Write-Error "Batch request failed: $_"
@@ -134,7 +206,22 @@ function Send-GraphBatchRequest {
                     while ($ResultData -and $ResultData.'@odata.nextLink') {
                         try {
                             if ($VerboseMode) { Write-Host "Fetching next page: $($ResultData.'@odata.nextLink')" }
-                            $NextResponse = Invoke-RestMethod -Uri $ResultData.'@odata.nextLink' -Headers $Headers
+
+                            # Request Parameters
+                            $irmParams = @{
+                                Uri         = $ResultData.'@odata.nextLink'
+                                Headers     = $Headers
+                                Method      = 'GET'
+                                ErrorAction = 'Stop'
+                            }
+                            
+                            if ($Proxy) {
+                                $irmParams['Proxy'] = $Proxy
+                            }
+                            
+                            # Send request
+                            $NextResponse = Invoke-RestMethod @irmParams
+
                             $ResultData.value += $NextResponse.value
                             $ResultData.'@odata.nextLink' = $NextResponse.'@odata.nextLink'
                         } catch {
