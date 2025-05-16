@@ -13,8 +13,11 @@
 .PARAMETER Requests
     An array of request objects formatted for Microsoft Graph batch requests.
 
+.PARAMETER DebugMode
+    Enables verbose debug logging to provide additional information about request processing.
+
 .PARAMETER VerboseMode
-    Enables verbose logging to provide additional information about request processing.
+    Enables verbose output to give some information about the amount of sent requests.
 
 .PARAMETER UserAgent
     Specifies the user agent string to be used in the HTTP requests. This can be customized to mimic specific browser or application behavior.
@@ -23,7 +26,7 @@
 .PARAMETER MaxRetries
     Specifies the maximum number of retry attempts for failed requests. Default is 5.
 
-.PARAMETER Beta
+.PARAMETER BetaAPI
     If specified, uses the Graph Beta endpoint instead of v1.0.
 
 .PARAMETER RawJson
@@ -51,7 +54,7 @@
         @{ "id" = "1"; "method" = "GET"; "url" = "/groups" }
     )
     
-    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -VerboseMode
+    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -DebugMode
 
 .EXAMPLE
     $AccessToken = "YOUR_ACCESS_TOKEN"
@@ -73,7 +76,7 @@
         @{ "id" = "1"; "method" = "GET"; "url" = "/groups"},
         @{"id" = "2"; "method" = "GET"; "url" = "/users"}
     )
-    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -VerboseMode -proxy http://127.0.0.1:8080 -QueryParameters @{'$select' = 'displayName' }
+    Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests -DebugMode -proxy http://127.0.0.1:8080 -QueryParameters @{'$select' = 'displayName' }
 
 .EXAMPLE
     $AccessToken = "YOUR_ACCESS_TOKEN"
@@ -88,7 +91,7 @@
     GitHub: https://github.com/zh54321/GraphBatchRequest
 #>
 
-function Send-GraphBatchRequest { 
+function Send-GraphBatchRequest {
     param (
         [Parameter(Mandatory = $true)]
         [string]$AccessToken,
@@ -103,44 +106,41 @@ function Send-GraphBatchRequest {
         [int]$BatchDelay = 0,
         [string]$Proxy,
         [hashtable]$QueryParameters,
+        [switch]$DebugMode,
         [switch]$VerboseMode,
         [switch]$BetaAPI,
         [switch]$RawJson
     )
 
-    # Constants
     $ApiVersion = if ($BetaAPI) { "beta" } else { "v1.0" }
     $BatchUrl = "https://graph.microsoft.com/$ApiVersion/`$batch"
     $MaxBatchSize = 20
-    
-    # Validate Requests
+    $HttpRequestCount = 0
+    $SubRequestCount = 0
+
     if (-not $Requests -or $Requests.Count -eq 0) {
         Write-Error "No requests provided."
         return
     }
-    
-    # Split Requests into Batches (max 20 per batch)
-    $Batches = @()
+
+    $Batches = New-Object 'System.Collections.Generic.List[object]'
     for ($i = 0; $i -lt $Requests.Count; $i += $MaxBatchSize) {
-        $Batches += , ($Requests[$i..([math]::Min($i + $MaxBatchSize - 1, $Requests.Count - 1))])
+        $Batches.Add($Requests[$i..([math]::Min($i + $MaxBatchSize - 1, $Requests.Count - 1))])
     }
-    
-    # Execute Batches
-    $Results = @()
-    
+
+    $Results = New-Object 'System.Collections.Generic.List[object]'
+    $GlobalNextLinks = New-Object 'System.Collections.Generic.List[string]'
+    $PagedResultsMap = @{}
+
     foreach ($Batch in $Batches) {
         $PendingRequests = $Batch
         $RetryCount = 0
 
         foreach ($req in $PendingRequests) {
             $effectiveParams = @{}
-        
-            # Use per-request queryParameters if defined
             if ($req.ContainsKey('queryParameters')) {
                 $effectiveParams += $req.queryParameters
             }
-        
-            # Merge in global parameters if not already present
             if ($QueryParameters) {
                 foreach ($key in $QueryParameters.Keys) {
                     if (-not $effectiveParams.ContainsKey($key)) {
@@ -148,14 +148,11 @@ function Send-GraphBatchRequest {
                     }
                 }
             }
-        
-            # Build and append query string to the URL
             if ($effectiveParams.Count -gt 0) {
-                $queryString = ($effectiveParams.GetEnumerator() |
-                    ForEach-Object {
-                        "$($_.Key)=$([uri]::EscapeDataString($_.Value))"
-                    }) -join '&'
-        
+                $queryString = ($effectiveParams.GetEnumerator() | ForEach-Object {
+                    "$($_.Key)=$([uri]::EscapeDataString($_.Value))"
+                }) -join '&'
+
                 if ($req.url -notmatch "\?") {
                     $req.url = "$($req.url)?$queryString"
                 } else {
@@ -171,119 +168,222 @@ function Send-GraphBatchRequest {
                 "Authorization" = "Bearer $AccessToken"
                 "Content-Type" = "application/json"
             }
-            
-            if ($VerboseMode) { Write-Host "Sending batch request: $($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)" }
+
+            $irmParams = @{
+                Uri         = $BatchUrl
+                Method      = 'POST'
+                Headers     = $Headers
+                Body        = ($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)
+                ErrorAction = 'Stop'
+            }
+
+            if ($Proxy) { $irmParams['Proxy'] = $Proxy }
+            $HttpRequestCount++
+            $SubRequestCount += $PendingRequests.Count
 
             try {
-
-                # Request Parameters
-                $irmParams = @{
-                    Uri         = $BatchUrl
-                    Method      = 'POST'
-                    Headers     = $Headers
-                    Body        = ($BatchRequest | ConvertTo-Json -Depth $JsonDepthRequest)
-                    ErrorAction = 'Stop'
-                }
-            
-                if ($Proxy) {
-                    $irmParams['Proxy'] = $Proxy
-                }
-                
-                # Send request
                 $Response = Invoke-RestMethod @irmParams
-                $PendingRequests = @()  # Reset failed requests
+                $PendingRequests = @()
             } catch {
                 Write-Error "Batch request failed: $_"
                 return
             }
 
-            # Process responses
             $FailedRequests = @()
             foreach ($Resp in $Response.responses) {
                 if ($Resp.status -ge 200 -and $Resp.status -lt 300) {
-                    # Handle pagination if needed
                     $ResultData = $Resp.body
-                    while ($ResultData -and $ResultData.'@odata.nextLink') {
-                        try {
-                            if ($VerboseMode) { Write-Host "Fetching next page: $($ResultData.'@odata.nextLink')" }
-
-                            # Request Parameters
-                            $irmParams = @{
-                                Uri         = $ResultData.'@odata.nextLink'
-                                Headers     = $Headers
-                                Method      = 'GET'
-                                ErrorAction = 'Stop'
-                            }
-                            
-                            if ($Proxy) {
-                                $irmParams['Proxy'] = $Proxy
-                            }
-                            
-                            # Send request
-                            $NextResponse = Invoke-RestMethod @irmParams
-
-                            $ResultData.value += $NextResponse.value
-                            $ResultData.'@odata.nextLink' = $NextResponse.'@odata.nextLink'
-                        } catch {
-                            Write-Error "Failed to fetch next page: $_"
-                            break
-                        }
+                    $PagedResultsMap[$Resp.id] = New-Object 'System.Collections.Generic.List[object]'
+                    if ($ResultData.value) {
+                        $ResultData.value | ForEach-Object { $PagedResultsMap[$Resp.id].Add($_) }
                     }
-                    $Results += @{ id = $Resp.id; status = $Resp.status; response = $ResultData }
+                    if ($ResultData.'@odata.nextLink') {
+                        $GlobalNextLinks.Add("$($Resp.id)|$($ResultData.'@odata.nextLink')")
+						if ($Resp.id -notmatch '^[0-9a-fA-F\-]{36}$') {
+							Write-Warning "[{0}] Suspicious ID captured during pagination: '{1}'" -f (Get-Date -Format "HH:mm:ss"), $Resp.id
+						}
+                    }
                 } else {
                     $ErrorCode = $Resp.body.error.code
                     $ErrorMessage = $Resp.body.error.message
-                    write-host "[!] Graph Batch Request: ID $($Resp.id) failed with status $($Resp.status): $ErrorCode - $ErrorMessage"
-                    # Handle throttling & transient errors per request
+                    Write-Host "[!] Graph Batch Request: ID $($Resp.id) failed with status $($Resp.status): $ErrorCode - $ErrorMessage"
                     if ($Resp.status -in @(429, 500, 502, 503, 504)) {
-                        $RetryAfter = $null
-
-                        # Try to parse "Retry-After" from error message
-                        if ($ErrorMessage -match "try after (\d+) seconds") {
-                            $RetryAfter = [int]$matches[1]
-                        }
-                        
-                        if ($RetryAfter) {
-                            if ($VerboseMode) {
-                                write-host "[i] Retrying request $($Resp.id) after $RetryAfter seconds..."
-                            } else {
-                                write-host "[!] Request will be resent in $RetryAfter seconds..."
-                            }
-                            Start-Sleep -Seconds $RetryAfter
-                        } else {
-                            if ($RetryCount -eq 0) {
-                                $Backoff = 0
-                                write-host "[i] Retrying request $($Resp.id)..."
-                            } else {
-                                $Backoff = [math]::Pow(2, $RetryCount)
-                                write-host "[!] Request will be resent in $Backoff seconds..."
-                            }
-                            Start-Sleep -Seconds $Backoff
-                        }
-                        # Add to failed requests for retry
                         $FailedRequests += $Batch | Where-Object { $_.id -eq $Resp.id }
+                        Start-Sleep -Seconds ([math]::Pow(2, $RetryCount))
                     } else {
-                        # If it's a non-retryable error, log it and move on
-                        $Results += @{ id = $Resp.id; status = $Resp.status; errorCode = $ErrorCode; errorMessage = $ErrorMessage }
+                        $Results.Add(@{ id = $Resp.id; status = $Resp.status; errorCode = $ErrorCode; errorMessage = $ErrorMessage })
                     }
                 }
             }
 
-            # Update pending requests for retry
             $PendingRequests = $FailedRequests
             $RetryCount++
         } while ($PendingRequests.Count -gt 0 -and $RetryCount -lt $MaxRetries)
 
         if ($BatchDelay -gt 0) {
-            if ($VerboseMode) { Write-Host "Sleeping $BatchDelay seconds before next batch..." }
             Start-Sleep -Seconds $BatchDelay
         }
     }
 
-    # Return JSON if -RawJson switch is used, otherwise return PowerShell object
+	while ($GlobalNextLinks.Count -gt 0) {
+		$ToFetch = $GlobalNextLinks[0..([math]::Min(19, $GlobalNextLinks.Count - 1))]
+		$GlobalNextLinks.RemoveRange(0, $ToFetch.Count)
+
+		$Links = $ToFetch | ForEach-Object { ($_ -split '\|')[1] }
+		$Ids   = $ToFetch | ForEach-Object { ($_ -split '\|')[0] }
+
+		$BatchResult = Invoke-GraphNextLinkBatch -NextLinks $Links `
+            -Ids $Ids `
+            -AccessToken $AccessToken `
+            -UserAgent $UserAgent `
+            -JsonDepthRequest $JsonDepthRequest `
+            -JsonDepthResponse $JsonDepthResponse `
+            -Proxy $Proxy `
+            -VerboseMode:$VerboseMode `
+            -DebugMode:$DebugMode `
+            -HttpRequestCount ([ref]$HttpRequestCount) `
+            -SubRequestCount ([ref]$SubRequestCount)`
+            -ApiVersion $ApiVersion
+
+        foreach ($id in $BatchResult.values.Keys) {
+            if (-not $PagedResultsMap.ContainsKey($id)) {
+                Write-Warning "[{0}] [!] Missing first-page data for ID $id - initializing empty list." -f (Get-Date -Format "HH:mm:ss")
+                $PagedResultsMap[$id] = New-Object 'System.Collections.Generic.List[object]'
+            }
+        
+            $PagedResultsMap[$id].AddRange($BatchResult.values[$id])
+        
+            if ($BatchResult.nextLinks.ContainsKey($id)) {
+                $GlobalNextLinks.Add("$id|$($BatchResult.nextLinks[$id])")
+            }
+        }
+	}
+
+    foreach ($id in $PagedResultsMap.Keys) {
+        $Results.Add(@{ id = $id; status = 200; response = @{ value = $PagedResultsMap[$id].ToArray() } })
+    }
+
+    if ($VerboseMode) {
+        Write-Host "[i] Total HTTP requests sent (including pagination): $HttpRequestCount"
+        Write-Host "[i] Total Graph subrequests sent (individual operations): $SubRequestCount"
+    }
+
     if ($RawJson) {
         return $Results | ConvertTo-Json -Depth $JsonDepthResponse
     } else {
         return $Results
+    }
+}
+
+
+function Invoke-GraphNextLinkBatch {
+    param (
+        [string[]]$NextLinks,
+        [string[]]$Ids,
+        [string]$AccessToken,
+        [string]$UserAgent,
+        [int]$JsonDepthResponse = 10,
+        [int]$JsonDepthRequest = 10,
+        [string]$Proxy,
+		[ref]$HttpRequestCount,
+		[ref]$SubRequestCount,
+        [switch]$VerboseMode,
+		[switch]$DebugMode,
+        [string]$ApiVersion
+    )
+
+    $ResultsList = New-Object 'System.Collections.Generic.List[object]'
+    $MoreNextLinks = New-Object 'System.Collections.Generic.List[string]'
+
+    $Headers = @{
+        "Authorization" = "Bearer $AccessToken"
+        "User-Agent"    = $UserAgent
+        "Content-Type"  = "application/json"
+    }
+
+    for ($i = 0; $i -lt $NextLinks.Count; $i += 20) {
+        $BatchSet = $NextLinks[$i..([math]::Min($i + 19, $NextLinks.Count - 1))]
+        $BatchRequests = @()
+        $index = 0
+
+        foreach ($link in $BatchSet) {
+            $relativeUrl = $link -replace '^https://graph\.microsoft\.com/[^/]+', ''
+            $BatchRequests += @{
+                id     = "nl_$index"
+                method = "GET"
+                url    = $relativeUrl
+            }
+            $index++
+        }
+
+        $BatchBody = @{ requests = $BatchRequests }
+
+        $irmParams = @{
+            Uri         = "https://graph.microsoft.com/$ApiVersion/`$batch"
+            Method      = 'POST'
+            Headers     = $Headers
+            Body        = ($BatchBody | ConvertTo-Json -Depth $JsonDepthRequest)
+            ErrorAction = 'Stop'
+        }
+
+        if ($Proxy) { $irmParams['Proxy'] = $Proxy }
+
+        try {
+            if ($DebugMode) { Write-Host "[i] Sending nextLink batch request..." }
+			$HttpRequestCount.Value++
+			$SubRequestCount.Value += $BatchRequests.Count
+            $BatchResp = Invoke-RestMethod @irmParams
+
+$AllValues = New-Object 'System.Collections.Generic.List[object]'
+$AllNextLinks = New-Object 'System.Collections.Generic.List[string]'
+
+foreach ($resp in $BatchResp.responses) {
+    if ($resp.status -ge 200 -and $resp.status -lt 300) {
+        $data = $resp.body
+
+        # Ensure each slot is an array (even if null)
+        if ($data.value) {
+            $AllValues.Add(@($data.value))
+        } else {
+            $AllValues.Add(@())
+        }
+
+        if ($data.'@odata.nextLink') {
+            $AllNextLinks.Add($data.'@odata.nextLink')
+        } else {
+            $AllNextLinks.Add($null)
+        }
+    } else {
+        Write-Warning "NextLink subrequest failed: ID $($resp.id) ($($resp.status))"
+        $AllValues.Add(@())        # Maintain index consistency
+        $AllNextLinks.Add($null)
+    }
+}
+        } catch {
+            Write-Error "Failed nextLink batch: $_ "
+        }
+    }
+    $ResultMap = @{}
+    $MoreLinksMap = @{}
+    
+    foreach ($resp in $BatchResp.responses) {
+        $i = [int]($resp.id -replace 'nl_', '')
+        $realId = $Ids[$i]
+    
+        if (-not $ResultMap.ContainsKey($realId)) {
+            $ResultMap[$realId] = New-Object 'System.Collections.Generic.List[object]'
+        }
+    
+        if ($resp.body.value) {
+            $ResultMap[$realId].AddRange(@($resp.body.value))
+        }
+    
+        if ($resp.body.'@odata.nextLink') {
+            $MoreLinksMap[$realId] = $resp.body.'@odata.nextLink'
+        }
+    }
+    return @{
+        values     = $ResultMap
+        nextLinks  = $MoreLinksMap
     }
 }
