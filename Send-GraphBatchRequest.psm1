@@ -199,9 +199,6 @@ function Send-GraphBatchRequest {
                     }
                     if ($ResultData.'@odata.nextLink') {
                         $GlobalNextLinks.Add("$($Resp.id)|$($ResultData.'@odata.nextLink')")
-						if ($Resp.id -notmatch '^[0-9a-fA-F\-]{36}$') {
-							Write-Warning "[{0}] Suspicious ID captured during pagination: '{1}'" -f (Get-Date -Format "HH:mm:ss"), $Resp.id
-						}
                     }
                 } else {
                     $ErrorCode = $Resp.body.error.code
@@ -247,7 +244,7 @@ function Send-GraphBatchRequest {
 
         foreach ($id in $BatchResult.values.Keys) {
             if (-not $PagedResultsMap.ContainsKey($id)) {
-                Write-Warning "[{0}] [!] Missing first-page data for ID $id - initializing empty list." -f (Get-Date -Format "HH:mm:ss")
+                Write-Warning ("[{0}] [!] Missing first-page data for ID {1} - initializing empty list." -f (Get-Date -Format "HH:mm:ss"), $id)
                 $PagedResultsMap[$id] = New-Object 'System.Collections.Generic.List[object]'
             }
         
@@ -334,31 +331,31 @@ function Invoke-GraphNextLinkBatch {
 			$SubRequestCount.Value += $BatchRequests.Count
             $BatchResp = Invoke-RestMethod @irmParams
 
-$AllValues = New-Object 'System.Collections.Generic.List[object]'
-$AllNextLinks = New-Object 'System.Collections.Generic.List[string]'
+            $AllValues = New-Object 'System.Collections.Generic.List[object]'
+            $AllNextLinks = New-Object 'System.Collections.Generic.List[string]'
 
-foreach ($resp in $BatchResp.responses) {
-    if ($resp.status -ge 200 -and $resp.status -lt 300) {
-        $data = $resp.body
+            foreach ($resp in $BatchResp.responses) {
+                if ($resp.status -ge 200 -and $resp.status -lt 300) {
+                    $data = $resp.body
 
-        # Ensure each slot is an array (even if null)
-        if ($data.value) {
-            $AllValues.Add(@($data.value))
-        } else {
-            $AllValues.Add(@())
-        }
+                    # Ensure each slot is an array (even if null)
+                    if ($data.value) {
+                        $AllValues.Add(@($data.value))
+                    } else {
+                        $AllValues.Add(@())
+                    }
 
-        if ($data.'@odata.nextLink') {
-            $AllNextLinks.Add($data.'@odata.nextLink')
-        } else {
-            $AllNextLinks.Add($null)
-        }
-    } else {
-        Write-Warning "NextLink subrequest failed: ID $($resp.id) ($($resp.status))"
-        $AllValues.Add(@())        # Maintain index consistency
-        $AllNextLinks.Add($null)
-    }
-}
+                    if ($data.'@odata.nextLink') {
+                        $AllNextLinks.Add($data.'@odata.nextLink')
+                    } else {
+                        $AllNextLinks.Add($null)
+                    }
+                } else {
+                    Write-Warning "NextLink subrequest failed: ID $($resp.id) ($($resp.status))"
+                    $AllValues.Add(@())        # Maintain index consistency
+                    $AllNextLinks.Add($null)
+                }
+            }
         } catch {
             Write-Error "Failed nextLink batch: $_ "
         }
