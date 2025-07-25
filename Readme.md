@@ -23,7 +23,8 @@ Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid
 | `-Proxy`                     | Specifies a web proxy to use for the HTTP request (e.g., http://proxyserver:8080).          |
 | `-RawJson`                   | If specified, returns the response as a raw JSON string instead of a PowerShell object.     |
 | `-BatchDelay` *(Default: 0)* | Specifies a delay in seconds between each batch request to avoid throttling.                |
-| `-QueryParameters`           | Query parameters (e.g., @{ '$select' = 'displayName'}) applied to all requests              |
+| `-QueryParameters`           | Query parameters (e.g., @{ '$select' = 'displayName'}) applied to all requests.             |
+| `-Silent`                    | Suppresses error output (for example, when a sub-request returns an HTTP 400 error).        |
 | `-JsonDepthResponse` *(Default: 10)* | Specifies the depth for JSON conversion (request). Useful for deeply nested objects in combination with `-RawJson` .  |
 
 ## Examples

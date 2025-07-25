@@ -48,6 +48,9 @@
 .PARAMETER JsonDepthResponse
     Specifies the depth for JSON conversion in the response (to use with -RawJson). Default is 10, but can be increased for complex objects.
 
+.PARAMETER Silent
+    Suppresses error output (for example, when a sub-request returns an HTTP 400 error).
+
 .EXAMPLE
     $AccessToken = "YOUR_ACCESS_TOKEN"
     $Requests = @(
@@ -108,6 +111,7 @@ function Send-GraphBatchRequest {
         [hashtable]$QueryParameters,
         [switch]$DebugMode,
         [switch]$VerboseMode,
+        [switch]$Silent,
         [switch]$BetaAPI,
         [switch]$RawJson
     )
@@ -203,7 +207,11 @@ function Send-GraphBatchRequest {
                 } else {
                     $ErrorCode = $Resp.body.error.code
                     $ErrorMessage = $Resp.body.error.message
-                    Write-Host "[!] Graph Batch Request: ID $($Resp.id) failed with status $($Resp.status): $ErrorCode - $ErrorMessage"
+
+                    #Output error if not silent
+                    if (-not $silent) {
+                        Write-Host "[!] Graph Batch Request: ID $($Resp.id) failed with status $($Resp.status): $ErrorCode - $ErrorMessage"
+                    }
                     if ($Resp.status -in @(429, 500, 502, 503, 504)) {
                         $FailedRequests += $Batch | Where-Object { $_.id -eq $Resp.id }
                         Start-Sleep -Seconds ([math]::Pow(2, $RetryCount))
