@@ -25,6 +25,7 @@ Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid
 | `-BatchDelay` *(Default: 0)* | Specifies a delay in seconds between each batch request to avoid throttling.                |
 | `-QueryParameters`           | Query parameters (e.g., @{ '$select' = 'displayName'}) applied to all requests.             |
 | `-Silent`                    | Suppresses error output (for example, when a sub-request returns an HTTP 400 error).        |
+| `-DisablePagination`         | Prevents the function from automatically following @odata.nextLink for paginated results.   |
 | `-JsonDepthResponse` *(Default: 10)* | Specifies the depth for JSON conversion (request). Useful for deeply nested objects in combination with `-RawJson` .  |
 
 ## Examples
