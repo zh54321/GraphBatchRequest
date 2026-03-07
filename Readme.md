@@ -21,7 +21,7 @@ Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid
 | `-DebugMode`                 | Enables verbose logging to provide additional information about request processing.         |
 | `-BetaAPI`                   | If specified, uses the Microsoft Graph `Beta` endpoint instead of `v1.0`.                   |
 | `-Proxy`                     | Specifies a web proxy to use for the HTTP request (e.g., http://proxyserver:8080).          |
-| `-SkipCertificateCheck`      | If specified, skips TLS certificate validation only (PS 7 only).                            |
+| `-SkipCertificateCheck`      | If specified, skips TLS certificate validation (PS 7 only).                                 |
 | `-RawJson`                   | If specified, returns the response as a raw JSON string instead of a PowerShell object.     |
 | `-BatchDelay` *(Default: 0)* | Specifies a delay in seconds between each batch request to avoid throttling.                |
 | `-QueryParameters`           | Query parameters (e.g., @{ '$select' = 'displayName'}) applied to all requests.             |
