@@ -13,9 +13,10 @@ Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid
 
 | Parameter                    | Description                                                                                 |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| `-AccessToken` *(Mandatory)* | The OAuth access token to authenticate against Microsoft Graph API.                         |
-| `-Requests` *(Mandatory)*    | An array of request objects formatted for Microsoft Graph batch requests.                   |
-| `-MaxRetries` *(Default: 6)* | Specifies the maximum number of retry attempts for failed requests.                         |
+| `-AccessToken` *(Mandatory)* | The OAuth access token to authenticate against Microsoft Graph API. Mutually exclusive with `-AccessTokenProvider`. |
+| `-AccessTokenProvider`       | Script block invoked before every request (incl. pagination/retries). Must return a valid token and handle refresh itself. For calls that may outlive a single token. Mutually exclusive with `-AccessToken`. |
+| `-Requests` *(Mandatory)*    | An array of request objects formatted for Microsoft Graph batch requests. Never modified by the module. |
+| `-MaxRetries` *(Default: 6)* | Specifies the maximum number of retry attempts for failed requests. Sub-request failures and batch-request failures get independent budgets. |
 | `-JsonDepthRequest` *(Default: 10)* | Specifies the depth for JSON conversion (request). Useful for deeply nested objects. |
 | `-UserAgent`                 | Specifies the user agent string to use for the HTTP requests.                               |
 | `-VerboseMode`               | Enables verbose output to give some information about the amount of sent requests.          |
@@ -28,8 +29,36 @@ Note: Cleartext access tokens can be obtained, for example, using [EntraTokenAid
 | `-BatchDelay` *(Default: 0)* | Specifies a delay in seconds between each batch request to avoid throttling.                |
 | `-QueryParameters`           | Query parameters (e.g., @{ '$select' = 'displayName'}) applied to all requests.             |
 | `-Silent`                    | Suppresses error output (for example, when a sub-request returns an HTTP 400 error).        |
-| `-DisablePagination`         | Prevents the function from automatically following @odata.nextLink for paginated results.   |
+| `-DisablePagination`         | Prevents the function from automatically following @odata.nextLink. Affected results come back with `complete = $false` and a `nextLink` so you can page yourself. |
 | `-JsonDepthResponse` *(Default: 10)* | Specifies the depth for JSON conversion (response). Useful for deeply nested objects in combination with `-RawJson`. |
+
+## Results
+
+You get **exactly one entry per requested ID**, in the order you submitted them, so you can validate
+a run by comparing the returned ID set against the requested one.
+
+| Field | Present | Meaning |
+| ----- | ------- | ------- |
+| `id`      | always | The request ID you supplied. |
+| `status`  | always | The Graph status (`200`, `201`, `204`, `403`, …), or `"unknown"` if no response was seen. |
+| `response`| on success | The response body. Collection endpoints keep the `value` wrapper; single-object GETs, creates and action results return the body as Graph sent it. |
+| `errorCode` / `errorMessage` | on failure | The Graph error. |
+| `complete` | always | `$true` only when the full result for that ID was retrieved. |
+| `incompleteReason` | when `complete` is `$false` | `PaginationFailed`, `RequestFailed`, `NotAttempted`, or `PaginationDisabled`. |
+| `nextLink` | when known and not followed | Continuation link, so you can resume. |
+
+Because `complete` is on every entry, one uniform check finds every truncated or failed result:
+
+```powershell
+$Response = Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests
+$Incomplete = $Response | Where-Object { -not $_.complete }
+if ($Incomplete) {
+    $Incomplete | ForEach-Object { Write-Warning "$($_.id): $($_.incompleteReason)" }
+}
+```
+
+A batch request that cannot be delivered do not discard the run: everything already collected
+is returned, and the requests that never went out are reported as `NotAttempted`.
 
 ## Examples
 
@@ -124,8 +153,35 @@ $Response = Send-GraphBatchRequest -AccessToken $AccessToken -Requests $Requests
 $Response.response
 ```
 
+### Example 6: **Long-Running Collection With Token Renewal**
+
+For runs that may outlive a single access token, pass a scriptblock instead of a string. It is
+consulted before every HTTP request, including pagination. The module never parses or renews the
+token itself; it just asks you for the current one.
+
+```powershell
+$Provider = {
+    if (($script:Token.Expiration_time - [datetime]::Now).TotalMinutes -lt 30) {
+        Update-MyToken   # your own renewal
+    }
+    $script:Token.access_token
+}
+
+$Response = Send-GraphBatchRequest -AccessTokenProvider $Provider -Requests $Requests
+```
+
 ## Notes
 
 - Ensure that you have **valid Microsoft Graph API permissions** before executing requests.
 - The module automatically handles **the 429 throttling errors** using **exponential backoff**.
 - Requests are **automatically split** into batches of up to **20 requests per API call** by default, as required by Microsoft Graph. Use `-MaxBatchSize` with a smaller value to reduce burst concurrency.
+- The batch request itself is retried on transport failures (connection reset, DNS, timeout) and on retryable HTTP statuses. Statuses that cannot succeed on retry, such as `400` or `403`, fail immediately rather than sleeping through the backoff.
+- With `-AccessTokenProvider`, HTTP `401` also becomes retryable, since a retry can pick up a freshly issued token.
+
+### Behaviour changes to be aware of
+
+Upgrading from an earlier version:
+
+- Requests whose response is **not** a collection (single-object `GET`, `POST` create, action results) previously came back as `status = 200` with `response.value = @()`, silently discarding the body. They now return the real status and the real body.
+- Successful results previously always reported `status = 200`. They now report the status Graph returned, so a create reports `201`. Range checks (`$_.status -ge 200 -and $_.status -lt 300`) are unaffected; equality checks against `200` are not.
+- Results are returned in submission order rather than in hashtable enumeration order.
